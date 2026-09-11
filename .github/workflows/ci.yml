@@ -1,0 +1,230 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  # ---------------------------------------------------------------------
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/ruff-action@v3
+        with:
+          version: latest
+
+  # ---------------------------------------------------------------------
+  hadolint:
+    name: Lint Dockerfiles (hadolint)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - ca
+          - ra
+          - ocsp
+          - crl
+          - acme
+          - est
+          - scep
+          - gateway
+          - ca-mtls-proxy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: services/${{ matrix.service }}/Dockerfile
+          config: .hadolint.yaml
+
+  # ---------------------------------------------------------------------
+  unit-tests:
+    name: Unit tests (pkicore)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: pkica_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PKICA_TEST_DATABASE_URL: postgresql+psycopg://postgres:test@localhost:5432/pkica_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install cryptography asn1crypto "sqlalchemy>=2.0" "psycopg[binary]" \
+                      pydantic pydantic-settings pytest httpx fastapi
+          pip install --no-deps -e common/pkicore
+
+      - name: Run pytest
+        run: python -m pytest tests -v
+
+  # ---------------------------------------------------------------------
+  compose-validate:
+    name: Validate docker-compose.yml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker compose config
+        env:
+          AUDIT_HASH_CHAIN_SECRET: dummy-ci-secret
+          SOFTWARE_KMS_MASTER_KEY: ZHVtbXkta2V5LWZvci1jaS12YWxpZGF0aW9uLW9ubHkh
+        run: docker compose -f docker-compose.yml config -q
+
+  # ---------------------------------------------------------------------
+  build-python-images:
+    name: Build & smoke-test ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: ca
+            extra_env: >-
+              -e PKICA_ALLOW_SOFTWARE_KMS=true
+              -e PKICA_SOFTWARE_KMS_MASTER_KEY=ZHVtbXkta2V5LWZvci1jaS1zbW9rZS10ZXN0LW9ubHkh
+              -e PKICA_AUDIT_HASH_CHAIN_SECRET=ci-smoke-test-secret
+          - service: ra
+            extra_env: -e PKICA_ENVIRONMENT=development
+          - service: ocsp
+            extra_env: ""
+          - service: crl
+            extra_env: ""
+          - service: acme
+            extra_env: ""
+          - service: est
+            extra_env: ""
+          - service: scep
+            extra_env: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/${{ matrix.service }}/Dockerfile
+          tags: pkica-${{ matrix.service }}:ci
+          load: true
+          push: false
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Smoke test (import app.main)
+        run: |
+          docker run --rm --entrypoint python3 ${{ matrix.extra_env }} \
+            "pkica-${{ matrix.service }}:ci" -c "import app.main; print('${{ matrix.service }} import OK')"
+
+      - name: Scan image (trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: pkica-${{ matrix.service }}:ci
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "0" # report-only in CI; CD gates on this before publishing
+
+  # ---------------------------------------------------------------------
+  build-nginx-images:
+    name: Build & validate ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [gateway, ca-mtls-proxy]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Generate throwaway dev certs
+        run: |
+          pip install cryptography
+          python scripts/generate-dev-certs.py
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/${{ matrix.service }}/Dockerfile
+          tags: pkica-${{ matrix.service }}:ci
+          load: true
+          push: false
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: nginx -t (gateway)
+        if: matrix.service == 'gateway'
+        run: |
+          docker run --rm \
+            -v "${PWD}/certs/gateway.crt:/certs/server.crt:ro" \
+            -v "${PWD}/certs/gateway.key:/certs/server.key:ro" \
+            -v "${PWD}/certs/client-ca-bundle.crt:/certs/client-ca-bundle.crt:ro" \
+            pkica-gateway:ci nginx -t
+
+      - name: nginx -t (ca-mtls-proxy)
+        if: matrix.service == 'ca-mtls-proxy'
+        run: |
+          docker run --rm \
+            -v "${PWD}/certs/ca-mtls-proxy.crt:/certs/server.crt:ro" \
+            -v "${PWD}/certs/ca-mtls-proxy.key:/certs/server.key:ro" \
+            -v "${PWD}/certs/infra-ca.crt:/certs/internal-ca.crt:ro" \
+            pkica-ca-mtls-proxy:ci nginx -t
+
+      - name: Scan image (trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: pkica-${{ matrix.service }}:ci
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+  # ---------------------------------------------------------------------
+  trivy-repo-scan:
+    name: Scan repo for secrets/misconfig
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: secret,misconfig
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          skip-dirs: certs,.venv

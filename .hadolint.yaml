@@ -1,0 +1,25 @@
+# Hadolint config for PKICA Dockerfiles.
+# DL3008/DL3018: we intentionally don't pin apt/apk package versions for the
+# small set of build-only OS packages (build-essential, libssl-dev, swig) —
+# they're not shipped in the final distroless/nginx runtime image, only used
+# transiently in the builder stage. DL3059: multiple RUN layers in the
+# builder stage are fine, it's discarded after the multi-stage copy.
+# DL3013: Python dependency versions are pinned in each service's
+# requirements.txt / common/pkicore/pyproject.toml, not as exact
+# Dockerfile-level pip pins (`pip install --upgrade pip` and installing the
+# local `pkicore` package by path are both expected to be unpinned).
+# DL3066: `USER nonroot` / `USER nginx` are well-known named users baked
+# into the distroless/nginx-unprivileged base images we use, not arbitrary.
+ignored:
+  - DL3008
+  - DL3013
+  - DL3018
+  - DL3059
+  - DL3066
+
+failure-threshold: error
+
+trustedRegistries:
+  - docker.io
+  - gcr.io
+  - ghcr.io

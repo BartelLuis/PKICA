@@ -1,0 +1,81 @@
+version: 2
+updates:
+  # Shared library
+  - package-ecosystem: pip
+    directory: /common/pkicore
+    schedule: { interval: weekly }
+    labels: [dependencies, pkicore]
+
+  # Per-service Python dependencies
+  - package-ecosystem: pip
+    directory: /services/ca
+    schedule: { interval: weekly }
+    labels: [dependencies, ca]
+  - package-ecosystem: pip
+    directory: /services/ra
+    schedule: { interval: weekly }
+    labels: [dependencies, ra]
+  - package-ecosystem: pip
+    directory: /services/ocsp
+    schedule: { interval: weekly }
+    labels: [dependencies, ocsp]
+  - package-ecosystem: pip
+    directory: /services/crl
+    schedule: { interval: weekly }
+    labels: [dependencies, crl]
+  - package-ecosystem: pip
+    directory: /services/acme
+    schedule: { interval: weekly }
+    labels: [dependencies, acme]
+  - package-ecosystem: pip
+    directory: /services/est
+    schedule: { interval: weekly }
+    labels: [dependencies, est]
+  - package-ecosystem: pip
+    directory: /services/scep
+    schedule: { interval: weekly }
+    labels: [dependencies, scep]
+
+  # Dockerfiles (base image bumps — python:3.11-slim, distroless, nginx)
+  - package-ecosystem: docker
+    directory: /services/ca
+    schedule: { interval: weekly }
+    labels: [dependencies, docker]
+  - package-ecosystem: docker
+    directory: /services/ra
+    schedule: { interval: weekly }
+    labels: [dependencies, docker]
+  - package-ecosystem: docker
+    directory: /services/ocsp
+    schedule: { interval: weekly }
+    labels: [dependencies, docker]
+  - package-ecosystem: docker
+    directory: /services/crl
+    schedule: { interval: weekly }
+    labels: [dependencies, docker]
+  - package-ecosystem: docker
+    directory: /services/acme
+    schedule: { interval: weekly }
+    labels: [dependencies, docker]
+  - package-ecosystem: docker
+    directory: /services/est
+    schedule: { interval: weekly }
+    labels: [dependencies, docker]
+  - package-ecosystem: docker
+    directory: /services/scep
+    schedule: { interval: weekly }
+    labels: [dependencies, docker]
+  - package-ecosystem: docker
+    directory: /services/gateway
+    schedule: { interval: weekly }
+    labels: [dependencies, docker]
+  - package-ecosystem: docker
+    directory: /services/ca-mtls-proxy
+    schedule: { interval: weekly }
+    labels: [dependencies, docker]
+
+  # GitHub Actions used in the CI/CD workflows themselves
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    labels: [dependencies, ci]

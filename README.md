@@ -1,5 +1,13 @@
 # PKICA — Enterprise PKI Management Platform
 
+[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+[![CD](https://github.com/OWNER/REPO/actions/workflows/cd.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/cd.yml)
+[![CodeQL](https://github.com/OWNER/REPO/actions/workflows/codeql.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/codeql.yml)
+
+> Replace `OWNER/REPO` above with your actual GitHub org/repo once pushed —
+> see [docs/CI_CD.md](docs/CI_CD.md) for what each pipeline does and how to
+> configure signed, published container images.
+
 A hardened, containerized, horizontally-scalable Public Key Infrastructure (PKI)
 platform written in Python. Every functional role (CA, RA, OCSP, CRL, ACME, EST,
 SCEP, Gateway) runs as an **independent, minimal-privilege container** that can

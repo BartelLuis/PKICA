@@ -1,0 +1,12 @@
+line-length = 120
+target-version = "py311"
+extend-exclude = [".venv", "certs", ".pytest_cache"]
+
+[lint]
+# Keep this intentionally narrow for a first CI pass: real bugs (unused
+# imports, undefined names, obvious errors) rather than style nits.
+select = ["E9", "F"]
+ignore = ["F401"]
+
+[lint.per-file-ignores]
+"tests/*" = ["F401", "F811"]

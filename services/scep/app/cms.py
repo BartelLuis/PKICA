@@ -55,7 +55,6 @@ def build_enveloped_data(plaintext: bytes, recipient_certificate_der: bytes, rec
 
     encrypted_key = recipient_public_key.encrypt(key, asym_padding.PKCS1v15())
 
-    recipient_cert = cms.CMSCertificate.load(recipient_certificate_der) if False else None
     from asn1crypto import x509 as a_x509
 
     cert = a_x509.Certificate.load(recipient_certificate_der)

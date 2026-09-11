@@ -38,7 +38,7 @@ class RAService:
         if protocol not in profile.allowed_protocols.split(","):
             raise PolicyViolation(f"Protocol '{protocol}' not permitted for profile '{profile_name}'")
 
-        csr = crypto.parse_csr(csr_pem)  # raises ValueError on bad signature
+        crypto.parse_csr(csr_pem)  # raises ValueError on bad signature
         sans = requested_sans or []
 
         req = CertificateRequest(
