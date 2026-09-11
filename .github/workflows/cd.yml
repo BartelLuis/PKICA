@@ -63,7 +63,7 @@ jobs:
 
       # Build once, locally, so we can scan before ever pushing anything.
       - name: Build image (local, for scanning)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: services/${{ matrix.service }}/Dockerfile
@@ -84,7 +84,7 @@ jobs:
 
       - name: Push image
         id: push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: services/${{ matrix.service }}/Dockerfile
