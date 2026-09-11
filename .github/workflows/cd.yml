@@ -74,7 +74,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
       - name: Scan image (trivy) — blocks publish on CRITICAL/HIGH
-        uses: aquasecurity/trivy-action@v0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}-${{ matrix.service }}:${{ steps.meta.outputs.version }}
           format: table
