@@ -1,0 +1,245 @@
+########################################################################
+# PKICA reference deployment — all components on one Docker host.
+#
+# Network segmentation (see README.md / docs/ARCHITECTURE.md):
+#   db          CockroachDB cluster + every service that needs DB access
+#   ca-internal PRIVATE: only `ca` and `ca-mtls-proxy` — the CA process
+#               itself is unreachable from any other container.
+#   core        PRIVATE: `ca-mtls-proxy`, `ra`, `ocsp`, `crl` — the choke
+#               point RA/OCSP/CRL use to reach the CA.
+#   public      `gateway` + every protocol adapter (ra, acme, est, scep,
+#               ocsp, crl) — the only network with a published host port.
+#
+# For splitting components across separate hosts, see docs/SPLIT_DEPLOYMENT.md
+########################################################################
+
+x-python-service-defaults: &python_defaults
+  restart: unless-stopped
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+x-nginx-defaults: &nginx_defaults
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  cap_add:
+    - NET_BIND_SERVICE
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+services:
+  # ---------------------------------------------------------------
+  # CockroachDB — 3-node HA cluster (dev: --insecure; see
+  # docs/DEPLOYMENT.md to enable `--certs-dir` TLS for production).
+  # ---------------------------------------------------------------
+  roach1:
+    image: cockroachdb/cockroach:v24.1.5
+    command: start --insecure --join=roach1,roach2,roach3 --cache=.25 --max-sql-memory=.25
+    restart: unless-stopped
+    networks: [db]
+    volumes: [roach1-data:/cockroach/cockroach-data]
+    security_opt: [no-new-privileges:true]
+
+  roach2:
+    image: cockroachdb/cockroach:v24.1.5
+    command: start --insecure --join=roach1,roach2,roach3 --cache=.25 --max-sql-memory=.25
+    restart: unless-stopped
+    networks: [db]
+    volumes: [roach2-data:/cockroach/cockroach-data]
+    security_opt: [no-new-privileges:true]
+
+  roach3:
+    image: cockroachdb/cockroach:v24.1.5
+    command: start --insecure --join=roach1,roach2,roach3 --cache=.25 --max-sql-memory=.25
+    restart: unless-stopped
+    networks: [db]
+    volumes: [roach3-data:/cockroach/cockroach-data]
+    security_opt: [no-new-privileges:true]
+
+  roach-init:
+    image: cockroachdb/cockroach:v24.1.5
+    command: init --insecure --host=roach1
+    depends_on: [roach1, roach2, roach3]
+    networks: [db]
+    restart: "no"
+
+  # ---------------------------------------------------------------
+  # Certificate Authority — never exposed outside `ca-internal`.
+  # ---------------------------------------------------------------
+  ca:
+    <<: *python_defaults
+    build: { context: ., dockerfile: services/ca/Dockerfile }
+    environment: &ca_env
+      PKICA_SERVICE_NAME: ca
+      PKICA_ENVIRONMENT: ${PKICA_ENVIRONMENT:-production}
+      PKICA_DATABASE_URL: postgresql+psycopg://root@roach1:26257/pkica?sslmode=disable
+      PKICA_CA_KEY_BACKEND: ${CA_KEY_BACKEND:-software}
+      PKICA_ALLOW_SOFTWARE_KMS: ${ALLOW_SOFTWARE_KMS:-true}
+      PKICA_SOFTWARE_KMS_MASTER_KEY: ${SOFTWARE_KMS_MASTER_KEY:-}
+      PKICA_AWS_REGION: ${AWS_REGION:-}
+      PKICA_AZURE_KEY_VAULT_URL: ${AZURE_KEY_VAULT_URL:-}
+      PKICA_GCP_PROJECT_ID: ${GCP_PROJECT_ID:-}
+      PKICA_GCP_LOCATION: ${GCP_LOCATION:-}
+      PKICA_GCP_KMS_KEY_RING: ${GCP_KMS_KEY_RING:-}
+      PKICA_VAULT_ADDR: ${VAULT_ADDR:-}
+      PKICA_VAULT_TOKEN: ${VAULT_TOKEN:-}
+      PKICA_AUDIT_HASH_CHAIN_SECRET: ${AUDIT_HASH_CHAIN_SECRET:?required}
+    volumes:
+      - software-kms-data:/data/software-kms
+    networks: [db, ca-internal]
+    depends_on: [roach-init]
+
+  ca-mtls-proxy:
+    <<: *nginx_defaults
+    build: { context: ., dockerfile: services/ca-mtls-proxy/Dockerfile }
+    volumes:
+      - ./certs/ca-mtls-proxy.crt:/certs/server.crt:ro
+      - ./certs/ca-mtls-proxy.key:/certs/server.key:ro
+      - ./certs/infra-ca.crt:/certs/internal-ca.crt:ro
+    networks: [ca-internal, core]
+    depends_on: [ca]
+
+  # ---------------------------------------------------------------
+  # Registration Authority — policy engine, the only path to `ca`.
+  # ---------------------------------------------------------------
+  ra:
+    <<: *python_defaults
+    build: { context: ., dockerfile: services/ra/Dockerfile }
+    environment:
+      PKICA_SERVICE_NAME: ra
+      PKICA_ENVIRONMENT: ${PKICA_ENVIRONMENT:-production}
+      PKICA_DATABASE_URL: postgresql+psycopg://root@roach1:26257/pkica?sslmode=disable
+      PKICA_CA_INTERNAL_URL: https://ca-mtls-proxy:8443
+      PKICA_INTERNAL_TLS_CERT: /certs/ra.crt
+      PKICA_INTERNAL_TLS_KEY: /certs/ra.key
+      PKICA_INTERNAL_TLS_CA: /certs/infra-ca.crt
+      PKICA_OIDC_ISSUER: ${OIDC_ISSUER:-}
+      PKICA_OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
+      PKICA_OIDC_JWKS_URL: ${OIDC_JWKS_URL:-}
+      PKICA_AUDIT_HASH_CHAIN_SECRET: ${AUDIT_HASH_CHAIN_SECRET:?required}
+    volumes:
+      - ./certs/ra.crt:/certs/ra.crt:ro
+      - ./certs/ra.key:/certs/ra.key:ro
+      - ./certs/infra-ca.crt:/certs/infra-ca.crt:ro
+    networks: [db, core, public]
+    depends_on: [roach-init, ca-mtls-proxy]
+
+  ocsp:
+    <<: *python_defaults
+    build: { context: ., dockerfile: services/ocsp/Dockerfile }
+    environment:
+      PKICA_SERVICE_NAME: ocsp
+      PKICA_CA_INTERNAL_URL: https://ca-mtls-proxy:8443
+      PKICA_INTERNAL_TLS_CERT: /certs/ocsp.crt
+      PKICA_INTERNAL_TLS_KEY: /certs/ocsp.key
+      PKICA_INTERNAL_TLS_CA: /certs/infra-ca.crt
+    volumes:
+      - ./certs/ocsp.crt:/certs/ocsp.crt:ro
+      - ./certs/ocsp.key:/certs/ocsp.key:ro
+      - ./certs/infra-ca.crt:/certs/infra-ca.crt:ro
+    networks: [core, public]
+    depends_on: [ca-mtls-proxy]
+
+  crl:
+    <<: *python_defaults
+    build: { context: ., dockerfile: services/crl/Dockerfile }
+    environment:
+      PKICA_SERVICE_NAME: crl
+      PKICA_CA_INTERNAL_URL: https://ca-mtls-proxy:8443
+      PKICA_INTERNAL_TLS_CERT: /certs/crl.crt
+      PKICA_INTERNAL_TLS_KEY: /certs/crl.key
+      PKICA_INTERNAL_TLS_CA: /certs/infra-ca.crt
+    volumes:
+      - ./certs/crl.crt:/certs/crl.crt:ro
+      - ./certs/crl.key:/certs/crl.key:ro
+      - ./certs/infra-ca.crt:/certs/infra-ca.crt:ro
+    networks: [core, public]
+    depends_on: [ca-mtls-proxy]
+
+  # ---------------------------------------------------------------
+  # Enrollment protocol adapters — talk to `ra`, never to `ca` directly.
+  # ---------------------------------------------------------------
+  acme:
+    <<: *python_defaults
+    build: { context: ., dockerfile: services/acme/Dockerfile }
+    environment:
+      PKICA_SERVICE_NAME: acme
+      PKICA_DATABASE_URL: postgresql+psycopg://root@roach1:26257/pkica?sslmode=disable
+      PKICA_RA_INTERNAL_URL: http://ra:8000
+    networks: [db, public]
+    depends_on: [ra]
+
+  est:
+    <<: *python_defaults
+    build: { context: ., dockerfile: services/est/Dockerfile }
+    environment:
+      PKICA_SERVICE_NAME: est
+      PKICA_RA_INTERNAL_URL: http://ra:8000
+      PKICA_CA_INTERNAL_URL: https://ca-mtls-proxy:8443
+      PKICA_EST_ENROLLMENT_USERS: ${EST_ENROLLMENT_USERS:-}
+    networks: [core, public]
+    depends_on: [ra]
+
+  scep:
+    <<: *python_defaults
+    build: { context: ., dockerfile: services/scep/Dockerfile }
+    read_only: false  # needs to persist its dedicated decrypt keypair
+    environment:
+      PKICA_SERVICE_NAME: scep
+      PKICA_RA_INTERNAL_URL: http://ra:8000
+      PKICA_CA_INTERNAL_URL: https://ca-mtls-proxy:8443
+    volumes:
+      - scep-ra-data:/data/scep-ra
+    networks: [core, public]
+    depends_on: [ra]
+
+  # ---------------------------------------------------------------
+  # Public edge
+  # ---------------------------------------------------------------
+  gateway:
+    <<: *nginx_defaults
+    build: { context: ., dockerfile: services/gateway/Dockerfile }
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./certs/gateway.crt:/certs/server.crt:ro
+      - ./certs/gateway.key:/certs/server.key:ro
+      - ./certs/client-ca-bundle.crt:/certs/client-ca-bundle.crt:ro
+    networks: [public]
+    depends_on: [ra, acme, est, scep, ocsp, crl]
+
+networks:
+  db:
+    internal: true
+  ca-internal:
+    internal: true
+  core:
+    internal: true
+  public:
+    driver: bridge
+
+volumes:
+  roach1-data:
+  roach2-data:
+  roach3-data:
+  software-kms-data:
+  scep-ra-data:
