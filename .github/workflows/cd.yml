@@ -80,6 +80,30 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
+      - name: Generate throwaway dev certificates for nginx validation
+        if: matrix.service == 'gateway' || matrix.service == 'ca-mtls-proxy'
+        run: |
+          python3 -m pip install --quiet cryptography
+          python3 scripts/generate-dev-certs.py
+
+      - name: Validate gateway nginx configuration
+        if: matrix.service == 'gateway'
+        run: |
+          docker run --rm --user 0:0 \
+            -v "${PWD}/certs/gateway.crt:/certs/server.crt:ro" \
+            -v "${PWD}/certs/gateway.key:/certs/server.key:ro" \
+            -v "${PWD}/certs/client-ca-bundle.crt:/certs/client-ca-bundle.crt:ro" \
+            "${{ fromJSON(steps.meta.outputs.json).tags[0] }}" nginx -t
+
+      - name: Validate CA mTLS proxy nginx configuration
+        if: matrix.service == 'ca-mtls-proxy'
+        run: |
+          docker run --rm --user 0:0 \
+            -v "${PWD}/certs/ca-mtls-proxy.crt:/certs/server.crt:ro" \
+            -v "${PWD}/certs/ca-mtls-proxy.key:/certs/server.key:ro" \
+            -v "${PWD}/certs/infra-ca.crt:/certs/internal-ca.crt:ro" \
+            "${{ fromJSON(steps.meta.outputs.json).tags[0] }}" nginx -t
+
       - name: Scan image (trivy) — blocks publish on CRITICAL
         uses: aquasecurity/trivy-action@v0.36.0
         with:
