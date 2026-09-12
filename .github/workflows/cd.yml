@@ -49,11 +49,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Normalize image name
+        id: image
+        shell: bash
+        run: |
+          image_name="$(printf '%s' "${IMAGE_NAMESPACE}-${{ matrix.service }}" | tr '[:upper:]' '[:lower:]')"
+          echo "name=${REGISTRY}/${image_name}" >> "$GITHUB_OUTPUT"
+
       - name: Derive image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}-${{ matrix.service }}
+          images: ${{ steps.image.outputs.name }}
           tags: |
             type=sha,prefix=,format=long
             type=ref,event=branch
@@ -96,7 +103,7 @@ jobs:
       - name: Generate SBOM (SPDX)
         uses: anchore/sbom-action@v0
         with:
-          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}-${{ matrix.service }}@${{ steps.push.outputs.digest }}
+          image: ${{ steps.image.outputs.name }}@${{ steps.push.outputs.digest }}
           format: spdx-json
           output-file: sbom-${{ matrix.service }}.spdx.json
 
@@ -110,7 +117,7 @@ jobs:
       - name: Attest build provenance (SLSA)
         uses: actions/attest-build-provenance@v2
         with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}-${{ matrix.service }}
+          subject-name: ${{ steps.image.outputs.name }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
@@ -122,7 +129,7 @@ jobs:
           COSIGN_EXPERIMENTAL: "1"
         run: |
           cosign sign --yes \
-            "${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}-${{ matrix.service }}@${{ steps.push.outputs.digest }}"
+            "${{ steps.image.outputs.name }}@${{ steps.push.outputs.digest }}"
 
   summary:
     name: Publish summary
