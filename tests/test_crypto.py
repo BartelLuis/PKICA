@@ -149,3 +149,8 @@ def test_software_kms_refuses_without_opt_in(monkeypatch, tmp_path):
     monkeypatch.delenv("PKICA_ALLOW_SOFTWARE_KMS", raising=False)
     with pytest.raises(RuntimeError, match="disabled"):
         SoftwareKMSBackend(storage_path=str(tmp_path / "kms2"))
+
+
+def test_software_kms_rejects_path_traversal_key_ids(kms):
+    with pytest.raises(ValueError, match="Invalid key_id"):
+        kms.create_key(KeySpec(key_id="../escape", algorithm="EC_P256", label="bad"))

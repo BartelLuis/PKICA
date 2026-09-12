@@ -45,7 +45,11 @@ class SoftwareKMSBackend(KMSBackend):
         self._path.mkdir(parents=True, exist_ok=True)
 
     def _key_file(self, key_id: str) -> Path:
-        return self._path / f"{key_id}.enc"
+        base_path = self._path.resolve(strict=True)
+        key_path = (base_path / f"{key_id}.enc").resolve(strict=False)
+        if os.path.commonpath([str(base_path), str(key_path)]) != str(base_path):
+            raise ValueError("Invalid key_id")
+        return key_path
 
     def create_key(self, spec: KeySpec) -> str:
         if spec.algorithm.startswith("RSA"):
