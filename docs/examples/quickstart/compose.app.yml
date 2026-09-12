@@ -1,0 +1,153 @@
+# Isolated evaluation only. This preserves the repository's current application
+# behavior, including enrollment/authentication limitations described in the guide.
+# Run from the repository root with --env-file .env.
+# ca-mtls-proxy is resolved to CA_HOST_IP so its existing TLS DNS SAN remains valid.
+# RA/OCSP/CRL leave PKICA_INTERNAL_TLS_CA empty so CAClient uses verify=True.
+# HTTPX 0.28.1 otherwise returns before loading client certificates when verify
+# is a filename. SSL_CERT_FILE supplies this lab's trust root while preserving
+# client certificate authentication. OIDC/cloud HTTPS may require a combined
+# operating-system + infrastructure CA bundle instead of this lab-only root.
+x-python-service-defaults: &python_defaults
+  restart: unless-stopped
+  init: true
+  read_only: true
+  tmpfs: [/tmp]
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
+
+services:
+  ra:
+    <<: *python_defaults
+    build:
+      context: ../../..
+      dockerfile: docs/examples/quickstart/Dockerfile.database-client
+      args: { PKICA_SERVICE: ra }
+    environment:
+      PKICA_SERVICE_NAME: ra
+      PKICA_ENVIRONMENT: ${PKICA_ENVIRONMENT:-development}
+      PKICA_DATABASE_URL: ${DB_SQL_URL:-cockroachdb+psycopg://root@${DB_HOST_IP:?set DB_HOST_IP}:26257/pkica?sslmode=disable}
+      PKICA_CA_INTERNAL_URL: https://ca-mtls-proxy:8443
+      PKICA_INTERNAL_TLS_CERT: /certs/ra.crt
+      PKICA_INTERNAL_TLS_KEY: /certs/ra.key
+      PKICA_INTERNAL_TLS_CA: ""
+      SSL_CERT_FILE: /certs/infra-ca.crt
+      PKICA_OIDC_ISSUER: ${OIDC_ISSUER:-}
+      PKICA_OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
+      PKICA_OIDC_JWKS_URL: ${OIDC_JWKS_URL:-}
+      PKICA_AUDIT_HASH_CHAIN_SECRET: ${AUDIT_HASH_CHAIN_SECRET:?set AUDIT_HASH_CHAIN_SECRET}
+    extra_hosts:
+      ca-mtls-proxy: ${CA_HOST_IP:?set CA_HOST_IP}
+    volumes:
+      - ../../../certs/ra.crt:/certs/ra.crt:ro
+      - ../../../certs/ra.key:/certs/ra.key:ro
+      - ../../../certs/infra-ca.crt:/certs/infra-ca.crt:ro
+    networks: [core, public]
+
+  ocsp:
+    <<: *python_defaults
+    build: { context: ../../.., dockerfile: services/ocsp/Dockerfile }
+    environment:
+      PKICA_SERVICE_NAME: ocsp
+      PKICA_CA_INTERNAL_URL: https://ca-mtls-proxy:8443
+      PKICA_INTERNAL_TLS_CERT: /certs/ocsp.crt
+      PKICA_INTERNAL_TLS_KEY: /certs/ocsp.key
+      PKICA_INTERNAL_TLS_CA: ""
+      SSL_CERT_FILE: /certs/infra-ca.crt
+    extra_hosts:
+      ca-mtls-proxy: ${CA_HOST_IP:?set CA_HOST_IP}
+    volumes:
+      - ../../../certs/ocsp.crt:/certs/ocsp.crt:ro
+      - ../../../certs/ocsp.key:/certs/ocsp.key:ro
+      - ../../../certs/infra-ca.crt:/certs/infra-ca.crt:ro
+    networks: [core, public]
+
+  crl:
+    <<: *python_defaults
+    build: { context: ../../.., dockerfile: services/crl/Dockerfile }
+    environment:
+      PKICA_SERVICE_NAME: crl
+      PKICA_CA_INTERNAL_URL: https://ca-mtls-proxy:8443
+      PKICA_INTERNAL_TLS_CERT: /certs/crl.crt
+      PKICA_INTERNAL_TLS_KEY: /certs/crl.key
+      PKICA_INTERNAL_TLS_CA: ""
+      SSL_CERT_FILE: /certs/infra-ca.crt
+    extra_hosts:
+      ca-mtls-proxy: ${CA_HOST_IP:?set CA_HOST_IP}
+    volumes:
+      - ../../../certs/crl.crt:/certs/crl.crt:ro
+      - ../../../certs/crl.key:/certs/crl.key:ro
+      - ../../../certs/infra-ca.crt:/certs/infra-ca.crt:ro
+    networks: [core, public]
+
+  acme:
+    <<: *python_defaults
+    build:
+      context: ../../..
+      dockerfile: docs/examples/quickstart/Dockerfile.database-client
+      args: { PKICA_SERVICE: acme }
+    environment:
+      PKICA_SERVICE_NAME: acme
+      PKICA_DATABASE_URL: ${DB_SQL_URL:-cockroachdb+psycopg://root@${DB_HOST_IP:?set DB_HOST_IP}:26257/pkica?sslmode=disable}
+      PKICA_RA_INTERNAL_URL: http://ra:8000
+    networks: [public]
+    depends_on: [ra]
+
+  est:
+    <<: *python_defaults
+    build: { context: ../../.., dockerfile: services/est/Dockerfile }
+    environment:
+      PKICA_SERVICE_NAME: est
+      PKICA_RA_INTERNAL_URL: http://ra:8000
+      PKICA_CA_INTERNAL_URL: https://ca-mtls-proxy:8443
+      PKICA_EST_ENROLLMENT_USERS: ${EST_ENROLLMENT_USERS:-}
+    extra_hosts:
+      ca-mtls-proxy: ${CA_HOST_IP:?set CA_HOST_IP}
+    networks: [core, public]
+    depends_on: [ra]
+
+  scep:
+    <<: *python_defaults
+    build: { context: ../../.., dockerfile: services/scep/Dockerfile }
+    read_only: false
+    environment:
+      PKICA_SERVICE_NAME: scep
+      PKICA_RA_INTERNAL_URL: http://ra:8000
+      PKICA_CA_INTERNAL_URL: https://ca-mtls-proxy:8443
+    extra_hosts:
+      ca-mtls-proxy: ${CA_HOST_IP:?set CA_HOST_IP}
+    volumes:
+      - scep-ra-data:/data/scep-ra
+    networks: [core, public]
+    depends_on: [ra]
+
+  gateway:
+    build: { context: ../../.., dockerfile: services/gateway/Dockerfile }
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+    ports:
+      - "${APP_HOST_IP:?set APP_HOST_IP to this host's private IPv4 address}:8443:8443"
+    volumes:
+      - ../../../certs/gateway.crt:/certs/server.crt:ro
+      - ../../../certs/gateway.key:/certs/server.key:ro
+      - ../../../certs/client-ca-bundle.crt:/certs/client-ca-bundle.crt:ro
+    networks: [public]
+    depends_on: [ra, acme, est, scep, ocsp, crl]
+
+networks:
+  core:
+    internal: true
+  public:
+    driver: bridge
+
+volumes:
+  scep-ra-data:

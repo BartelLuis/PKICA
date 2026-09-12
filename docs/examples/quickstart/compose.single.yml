@@ -1,0 +1,50 @@
+# Isolated evaluation only: the base stack uses software KMS and insecure SQL.
+# Run from the repository root with --env-file .env and both Compose files:
+# docker compose -f docker-compose.yml -f docs/examples/quickstart/compose.single.yml ...
+# !override requires Docker Compose 2.24.4 or later.
+services:
+  roach1:
+    command: start --insecure --join=roach1,roach2,roach3 --cache=256MiB --max-sql-memory=256MiB
+  roach2:
+    command: start --insecure --join=roach1,roach2,roach3 --cache=256MiB --max-sql-memory=256MiB
+  roach3:
+    command: start --insecure --join=roach1,roach2,roach3 --cache=256MiB --max-sql-memory=256MiB
+  gateway:
+    ports: !override
+      - "${GATEWAY_BIND_IP:-127.0.0.1}:8443:8443"
+
+  # Lab images add the CockroachDB SQLAlchemy adapter required by these URLs.
+  ca:
+    build:
+      dockerfile: docs/examples/quickstart/Dockerfile.database-client
+      args: { PKICA_SERVICE: ca }
+    environment:
+      PKICA_DATABASE_URL: cockroachdb+psycopg://root@roach1:26257/pkica?sslmode=disable
+  acme:
+    build:
+      dockerfile: docs/examples/quickstart/Dockerfile.database-client
+      args: { PKICA_SERVICE: acme }
+    environment:
+      PKICA_DATABASE_URL: cockroachdb+psycopg://root@roach1:26257/pkica?sslmode=disable
+
+  # HTTPX 0.28.1 returns before loading client certificates when verify is a
+  # filename. Let CAClient pass verify=True and load this lab root through
+  # SSL_CERT_FILE instead, retaining the mounted client certificates/keys.
+  # This narrows trust to the lab CA; OIDC/cloud HTTPS may need a combined
+  # operating-system + infrastructure CA bundle instead.
+  ra:
+    build:
+      dockerfile: docs/examples/quickstart/Dockerfile.database-client
+      args: { PKICA_SERVICE: ra }
+    environment:
+      PKICA_DATABASE_URL: cockroachdb+psycopg://root@roach1:26257/pkica?sslmode=disable
+      PKICA_INTERNAL_TLS_CA: ""
+      SSL_CERT_FILE: /certs/infra-ca.crt
+  ocsp:
+    environment:
+      PKICA_INTERNAL_TLS_CA: ""
+      SSL_CERT_FILE: /certs/infra-ca.crt
+  crl:
+    environment:
+      PKICA_INTERNAL_TLS_CA: ""
+      SSL_CERT_FILE: /certs/infra-ca.crt

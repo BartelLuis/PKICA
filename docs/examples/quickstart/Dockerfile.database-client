@@ -1,0 +1,42 @@
+# syntax=docker/dockerfile:1.7
+# Quickstart-only lab image for the CA, RA, and ACME database clients.
+# The CockroachDB SQLAlchemy dialect handles CockroachDB's server version and
+# SQL behavior; the generic PostgreSQL dialect in the base stack cannot do so.
+# This adds the database adapter without changing application source. The other
+# evaluation limitations (software keys, insecure SQL, and development identity)
+# still apply; this is not a production deployment image.
+ARG PKICA_SERVICE=ca
+
+FROM python:3.11-slim AS builder
+ARG PKICA_SERVICE
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential libssl-dev pkg-config swig \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY common/pkicore /build/common/pkicore
+COPY services/${PKICA_SERVICE}/requirements.txt /build/requirements.txt
+# Resolve the application and adapter together so their SQLAlchemy constraints
+# select one compatible dependency set in /deps.
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir --target=/deps /build/common/pkicore \
+        -r /build/requirements.txt sqlalchemy-cockroachdb==2.0.4
+COPY services/${PKICA_SERVICE}/app /build/app
+COPY scripts/seed-profiles.py /build/scripts/seed-profiles.py
+# New named volumes inherit this ownership from the image on first use.
+RUN mkdir -p /data/software-kms && chown -R 65532:65532 /data
+
+FROM gcr.io/distroless/python3-debian12:nonroot AS runtime
+ARG PKICA_SERVICE
+WORKDIR /app
+COPY --from=builder /deps /app/deps
+COPY --from=builder /build/app /app/app
+COPY --from=builder /build/scripts /app/scripts
+COPY --from=builder /data /data
+ENV PYTHONPATH=/app/deps:/app \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PKICA_SERVICE_NAME=${PKICA_SERVICE}
+
+USER nonroot
+EXPOSE 8000
+ENTRYPOINT ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]

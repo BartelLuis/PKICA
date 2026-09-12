@@ -93,21 +93,23 @@ Pluggable backend (`common/pkicore/kms`):
 
 Select per-CA in the `ca_backends` table / `CA_KEY_BACKEND` env var.
 
-## Quick start (single host, all components)
+## Quickstart on Debian 13
 
-```bash
-cp .env.example .env
-# edit .env: set strong secrets, choose KMS backend, etc.
-python scripts/generate-dev-certs.py   # dev-only internal mTLS material
-docker compose up -d --build
-docker compose exec ca python -m app.bootstrap create-root --name root-ca --subject '{"cn":"PKICA Root CA","o":"ACME Corp"}'
-docker compose exec ca python -m app.bootstrap create-intermediate --name issuing-ca-1 --parent root-ca --subject '{"cn":"PKICA Issuing CA 1","o":"ACME Corp"}'
-docker compose exec ca python scripts/seed-profiles.py --issuing-ca issuing-ca-1
-```
+| Guide | Covers |
+|---|---|
+| [Single host](docs/QUICKSTART.md) | Debian 13 preparation, Docker installation, secrets, TLS permissions, database initialization, CA bootstrap, verification, and restart/recovery |
+| [Multiple hosts](docs/QUICKSTART_MULTI_HOST.md) | Separate CA, database, and application servers, with per-host Compose examples and certificate transfer |
+| [Database across hosts](docs/QUICKSTART_DATABASE_CLUSTER.md) | One CockroachDB node per host, cluster initialization, SQL connection failover, and a node-failure test |
+| [Firewall rules](docs/FIREWALL_RULES.md) | Installation downloads, inbound access, traffic between hosts, and optional integrations |
 
-See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for full bootstrap, HA, and
-production hardening steps, and [docs/SPLIT_DEPLOYMENT.md](docs/SPLIT_DEPLOYMENT.md)
-for running each service on its own machine.
+The quickstarts configure restricted evaluation environments. Read the
+[current limitations and production requirements](docs/QUICKSTART_LIMITATIONS.md):
+certificate-chain and enrollment defects remain in the application, and the
+development identity grants unauthenticated administrator access. Successful
+bootstrap is not evidence of a production-ready PKI.
+
+See [deployment guidance](docs/DEPLOYMENT.md) and
+[split-deployment design notes](docs/SPLIT_DEPLOYMENT.md) for further planning.
 
 ## Security hardening highlights
 

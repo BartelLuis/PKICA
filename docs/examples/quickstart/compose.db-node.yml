@@ -1,0 +1,40 @@
+# Isolated evaluation only: SQL and node-to-node RPC are unencrypted and
+# unauthenticated. Run this file on each of three independent Debian hosts.
+# Run from the repository root with --env-file .env.
+# DB_NODE_IP is this host's private IPv4 address; DB_JOIN_ADDRESSES contains
+# all three private addresses with :26257. Allow TCP 26257 from the other
+# database nodes, CA_HOST_IP and APP_HOST_IP on the private network.
+services:
+  roach:
+    image: cockroachdb/cockroach:v24.1.5
+    command:
+      - start
+      - --insecure
+      - --listen-addr=0.0.0.0:26257
+      - --advertise-addr=${DB_NODE_IP:?set DB_NODE_IP to this host's private IPv4 address}:26257
+      - --join=${DB_JOIN_ADDRESSES:?set DB_JOIN_ADDRESSES to all three private IP:26257 addresses separated by commas}
+      - --locality=${DB_LOCALITY:-region=lab,zone=db1}
+      - --cache=256MiB
+      - --max-sql-memory=256MiB
+    restart: unless-stopped
+    ports:
+      - "${DB_NODE_IP:?set DB_NODE_IP to this host's private IPv4 address}:26257:26257"
+    volumes:
+      - roach-data:/cockroach/cockroach-data
+    networks: [db]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, cockroach, sql, --insecure, --host=localhost:26257, --execute=SELECT 1]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+
+networks:
+  db:
+    driver: bridge
+
+volumes:
+  # Each host's Docker daemon owns a separate volume. Never share this data
+  # directory between nodes; initialize the cluster once after all nodes start.
+  roach-data:

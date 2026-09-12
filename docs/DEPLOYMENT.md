@@ -1,86 +1,45 @@
-# Deployment Guide
+# Deployment guide
 
-## 1. Prerequisites
+For a new Debian 13 (Trixie) installation, use the following guides. They include
+the executable commands and Compose examples for the current repository.
 
-* Docker Engine 25+ / Docker Compose v2
-* Python 3.12 (only needed locally to run `scripts/generate-dev-certs.py`
-  and the seeding scripts — not required inside containers)
-* A KMS/HSM of your choice for production (AWS KMS, Azure Key Vault, GCP
-  KMS, HashiCorp Vault Transit, or a PKCS#11 HSM). The bundled `software`
-  backend is for local development/testing only.
+| Guide | Deployment |
+|---|---|
+| [Single-host quickstart](QUICKSTART.md) | All components on one Debian 13 server; gateway bound to loopback by default |
+| [Multi-host quickstart](QUICKSTART_MULTI_HOST.md) | Separate CA, database, and application servers on an isolated private network |
+| [Distributed database quickstart](QUICKSTART_DATABASE_CLUSTER.md) | Five hosts: CA, APP, and three independent CockroachDB nodes with SQL connection failover |
+| [Firewall rules](FIREWALL_RULES.md) | Installation egress, administration, service connections, and optional integrations |
+| [Limitations and production requirements](QUICKSTART_LIMITATIONS.md) | Known application defects and the work required before production acceptance |
 
-## 2. Bootstrap (single host, all components)
+Both quickstarts use the software key backend, an insecure database, and a
+development administrator identity. Keep them in a restricted evaluation
+environment. Certificate-chain and enrollment defects currently prevent treating
+these instructions as a production installation procedure.
 
-```bash
-cp .env.example .env                     # fill in real secrets
-python scripts/generate-dev-certs.py     # dev-only internal mTLS material
-docker compose up -d --build
-docker compose exec ca python -m app.bootstrap create-root \
-    --name root-ca --subject '{"cn":"PKICA Root CA","o":"ACME Corp"}'
-docker compose exec ca python -m app.bootstrap create-intermediate \
-    --name issuing-ca-1 --parent root-ca --subject '{"cn":"PKICA Issuing CA 1","o":"ACME Corp"}'
-docker compose exec ca python scripts/seed-profiles.py --issuing-ca issuing-ca-1
-```
+The bootstrap sequence matters: initialize CockroachDB, explicitly create the
+`pkica` database and audit sequence, create the schema/CAs with a one-off CA
+container, seed profiles, then start the applications. Container commands use
+`python3`. Generated private keys need permissions for their actual container
+users. The quickstarts cover
+these details and distinguish service liveness from functional validation.
 
-Verify:
+## Planning a production deployment
 
-```bash
-curl -k https://localhost:8443/healthz
-curl -k https://localhost:8443/directory          # ACME directory
-curl -k "https://localhost:8443/scep?operation=GetCACaps"
-```
+Resolve the [documented implementation limitations](QUICKSTART_LIMITATIONS.md)
+first. Configure managed service TLS, OIDC, database TLS and scoped users,
+KMS/HSM credentials and egress, backups, monitoring, and renewal procedures.
+Validate certificate trust, issuance, revocation, each enabled enrollment
+protocol, authorization, and restoration before accepting the deployment.
 
-## 3. Choosing a KMS/HSM backend
+The root `.env.example` lists configuration hints; it is not a complete
+production configuration. Some provider SDK credentials require explicit
+environment forwarding, file mounts, or workload identity in the CA service.
+The reference CA's internal Docker networks also need an explicit egress design
+before a cloud KMS is reachable.
 
-Set `CA_KEY_BACKEND` in `.env` to one of `aws_kms`, `azure_key_vault`,
-`gcp_kms`, `vault_transit`, `pkcs11_hsm`. Each requires backend-specific
-credentials — see the commented variables in `.env.example`. Credentials
-should be supplied via Docker secrets or your orchestrator's secret store
-in production, never as plain environment variables in a committed file.
-
-For `pkcs11_hsm`, mount the vendor PKCS#11 module (`.so`) into the `ca`
-container and set `PKICA_PKCS11_MODULE_PATH`, `PKICA_PKCS11_SLOT`,
-`PKICA_PKCS11_PIN` (as a Docker secret file, referenced via the
-`file://` convention supported by `pkicore.config`).
-
-## 4. Production hardening checklist
-
-* [ ] Enable CockroachDB TLS: generate node/client certs with
-      `cockroach cert create-ca` / `create-node` / `create-client` and run
-      each node with `--certs-dir` instead of `--insecure`
-      ([CockroachDB docs](https://www.cockroachlabs.com/docs/stable/security-reference/transport-layer-security)).
-* [ ] Replace `scripts/generate-dev-certs.py` output with real, short-lived
-      internal mTLS certificates issued by your own infra CA; automate
-      rotation (e.g. a sidecar that re-requests certs every 24h via EST/ACME
-      against a dedicated "infra" profile).
-* [ ] Configure a real OIDC provider (Keycloak, Azure AD, Okta, ...) and set
-      `OIDC_ISSUER` / `OIDC_AUDIENCE` / `OIDC_JWKS_URL`; the RA refuses to
-      start in `PKICA_ENVIRONMENT=production` without them.
-* [ ] Pin all base images to digests, scan images with `trivy`/`docker scout`
-      in CI, sign images (cosign) and verify signatures at deploy time.
-* [ ] Ship container stdout logs (structured JSON) to your SIEM; configure
-      `PKICA_SIEM_FORWARD_URL` and alert on `audit.record` anomalies.
-* [ ] Run `pkicore.audit.verify_chain` periodically (cron/Kubernetes
-      CronJob) and alert on any break.
-* [ ] Put the gateway behind a WAF/CDN (Cloudflare, AWS WAF, ModSecurity)
-      for internet-facing deployments.
-* [ ] Store `.env` secrets in a real secret manager (Vault, AWS Secrets
-      Manager, Azure Key Vault) and inject at container start, never bake
-      into images or commit to git.
-* [ ] Restrict outbound network egress from every container to only the
-      hosts it needs (DB, KMS endpoint, internal peers) via firewall/
-      security-group rules or a service mesh's egress policy.
-
-## 5. High availability
-
-* Scale any stateless service horizontally: `docker compose up -d --scale ra=3 --scale ocsp=3 --scale crl=3`
-  (put a load balancer in front, or migrate to Kubernetes — see
-  docs/SPLIT_DEPLOYMENT.md for the general pattern).
-* CockroachDB: run 3 nodes minimum (5+ across 3 AZs/regions for full HA)
-  and set `ZONE` survival goals per your requirements.
-* The CA service is intentionally *not* meant to be scaled to many replicas
-  in the same way — treat it like a safe/vault: a small, fixed number of
-  replicas (2 for failover), tightly access-controlled, ideally on
-  dedicated hardware/hosts for the Root CA in particular. Consider keeping
-  the Root CA fully offline and only bringing it online to sign new
-  Intermediate CAs.
+Three database containers on one machine do not tolerate host loss. Application
+replication also requires a defined load-balancing and state-management design;
+a `docker compose --scale` command alone does not establish high availability.
+For separate database hosts, use the [distributed database guide](QUICKSTART_DATABASE_CLUSTER.md).
+See also the [multi-host extension notes](QUICKSTART_MULTI_HOST.md#9-moving-beyond-this-topology)
+and [split-deployment design notes](SPLIT_DEPLOYMENT.md).

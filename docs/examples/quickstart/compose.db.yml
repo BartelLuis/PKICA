@@ -1,0 +1,46 @@
+# Isolated evaluation only: SQL is unencrypted and unauthenticated.
+# Three containers on one machine do not provide host-level high availability.
+# Run from the repository root with --env-file .env; allow TCP 26257 only
+# from CA_HOST_IP and APP_HOST_IP on the private network.
+services:
+  roach1:
+    image: cockroachdb/cockroach:v24.1.5
+    command: start --insecure --join=roach1,roach2,roach3 --cache=256MiB --max-sql-memory=256MiB
+    restart: unless-stopped
+    ports:
+      - "${DB_HOST_IP:?set DB_HOST_IP to this host's private IPv4 address}:26257:26257"
+    networks: [db]
+    volumes: [roach1-data:/cockroach/cockroach-data]
+    security_opt: [no-new-privileges:true]
+
+  roach2:
+    image: cockroachdb/cockroach:v24.1.5
+    command: start --insecure --join=roach1,roach2,roach3 --cache=256MiB --max-sql-memory=256MiB
+    restart: unless-stopped
+    networks: [db]
+    volumes: [roach2-data:/cockroach/cockroach-data]
+    security_opt: [no-new-privileges:true]
+
+  roach3:
+    image: cockroachdb/cockroach:v24.1.5
+    command: start --insecure --join=roach1,roach2,roach3 --cache=256MiB --max-sql-memory=256MiB
+    restart: unless-stopped
+    networks: [db]
+    volumes: [roach3-data:/cockroach/cockroach-data]
+    security_opt: [no-new-privileges:true]
+
+  roach-init:
+    image: cockroachdb/cockroach:v24.1.5
+    command: init --insecure --host=roach1
+    depends_on: [roach1, roach2, roach3]
+    networks: [db]
+    restart: "no"
+
+networks:
+  db:
+    driver: bridge
+
+volumes:
+  roach1-data:
+  roach2-data:
+  roach3-data:

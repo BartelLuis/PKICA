@@ -1,53 +1,66 @@
-# Splitting components across separate hosts/servers
+# Splitting components across hosts
 
-Every service in this repository is a standalone container with its own
-Dockerfile and its own network requirements — nothing hard-codes "all on
-one Docker Compose project". To split the platform across dedicated
-machines (recommended for production: at minimum, an isolated host for the
-CA), run each service's `docker compose` fragment on its own host and
-replace in-cluster DNS names (`ca-mtls-proxy`, `roach1`, `ra`, ...) with the
-real reachable addresses/hostnames of your other hosts, over a private
-network (VPN/VPC peering/dedicated VLAN — never route CA traffic over the
-public internet even with mTLS).
+Use the [Debian 13 multi-host quickstart](QUICKSTART_MULTI_HOST.md) for a complete
+three-server evaluation deployment. It provides standalone Compose manifests,
+per-host configuration, certificate distribution, ordered bootstrap, and
+connectivity checks. Apply the accompanying [firewall rules](FIREWALL_RULES.md).
 
-## Example: 3-host split
+The database can also run on separate hosts. The
+[distributed database quickstart](QUICKSTART_DATABASE_CLUSTER.md) gives a complete
+five-host variant: CA, APP, DB1, DB2, and DB3, with one CockroachDB node per DB host
+and all three SQL addresses configured on CA, RA, and ACME.
 
-| Host | Services | Network exposure |
+The executable baseline uses this placement:
+
+| Host | Services | Published port |
 |---|---|---|
-| `host-ca` (most restricted, ideally offline/air-gapped except for scheduled sync windows) | `ca`, `ca-mtls-proxy` | Only reachable from `host-core` over a private link/VPN on port 8443 |
-| `host-core` | `cockroachdb` (3-node cluster spread across this + 2 more DB hosts for real HA), `ra`, `ocsp`, `crl` | Reachable from `host-edge` on 8000, and pushes/reads to CockroachDB |
-| `host-edge` | `gateway`, `acme`, `est`, `scep` | Internet-facing, behind your load balancer/WAF |
+| CA | `ca`, `ca-mtls-proxy` | Private TCP 8443 for the CA proxy, allowed only from APP |
+| DB | Three local CockroachDB nodes | Private TCP 26257 on `roach1`, allowed only from CA and APP |
+| APP | `gateway`, `ra`, `ocsp`, `crl`, `acme`, `est`, `scep` | TCP 8443, restricted to approved lab clients |
 
-## Steps
+This separates the signing service and database from the application host while
+keeping gateway backends on one local Docker network. It does not provide
+host-level HA. The [known application limitations](QUICKSTART_LIMITATIONS.md)
+apply regardless of service placement.
 
-1. **Generate real internal mTLS certificates** for each service identity
-   (`ra`, `ocsp`, `crl`, `ca-mtls-proxy`) from your own infra CA — do not
-   reuse `scripts/generate-dev-certs.py` output across hosts/production.
-2. On `host-ca`: run only the `ca` + `ca-mtls-proxy` compose fragment
-   (extract those two services into their own `docker-compose.ca.yml`).
-   Configure `PKICA_DATABASE_URL` to point at the CockroachDB cluster's
-   load-balanced address on `host-core`/DB hosts. Firewall this host so
-   *only* `host-core`'s RA/OCSP/CRL source IPs can reach port 8443, and
-   only outbound access to the DB + your KMS/HSM endpoint is allowed.
-3. On `host-core`: run `ra`, `ocsp`, `crl`, and (if colocating) CockroachDB.
-   Set `PKICA_CA_INTERNAL_URL=https://<host-ca-address>:8443`.
-4. On `host-edge`: run `gateway`, `acme`, `est`, `scep`. Set
-   `PKICA_RA_INTERNAL_URL=http://<host-core-address>:8000` (put this over a
-   private network or add TLS — the reference `ra` app serves plain HTTP
-   because it assumes an isolated network; add a TLS-terminating proxy in
-   front of `ra` if the RA-to-adapter hop crosses an untrusted network).
-5. Repeat CockroachDB's standard multi-node join flow
-   (`--join=<db-host-1>,<db-host-2>,<db-host-3>`) across your DB hosts —
-   see [CockroachDB's own multi-node deployment docs](https://www.cockroachlabs.com/docs/stable/manual-deployment)
-   for the authoritative, up-to-date process (cert generation, load
-   balancing, backup/restore).
+## Additional separation
 
-## Kubernetes
+A dedicated edge/DMZ host or one host per service requires additional network and
+proxy configuration. Docker bridge service names are local to each host; use
+explicit private addresses or managed DNS for cross-host connections. Update
+every relevant service URL and gateway upstream, preserve paths/query strings,
+and provision server SANs for the names actually used by clients.
 
-If you outgrow Docker Compose, each `services/<name>/Dockerfile` builds a
-standard OCI image usable as-is in a Kubernetes `Deployment` +
-`NetworkPolicy` per the same segmentation model (`ca` in its own namespace
-with a restrictive `NetworkPolicy` allowing ingress only from
-`ca-mtls-proxy`'s pod selector, etc.). This repository ships Docker Compose
-manifests only; converting them to Helm charts is a mechanical exercise
-once you've validated the Compose-based topology.
+For adapter-to-RA connections, provide a proxy that verifies adapter client
+certificates and sets the verified identity headers. RA currently serves HTTP
+and expects those headers for its internal API. Do not publish its raw port 8000
+to an untrusted network. EST/SCEP also need authenticated CA-certificate access.
+The existing adapter authentication and routing defects must be resolved before
+using those enrollment paths; see [the detailed limitations](QUICKSTART_LIMITATIONS.md).
+
+Gateway-to-RA, OCSP, and CRL connections crossing hosts need their own protected
+transport and narrowly scoped firewall rules. Different HTTP services cannot all
+bind the same host IP and port; assign distinct private ports or route through
+an authenticated reverse proxy. Keep the CA application itself unexposed and
+reachable through its mTLS proxy.
+
+## High availability and an offline root
+
+Distribute CockroachDB nodes across independent machines, enable node/client
+TLS, advertise reachable names, and supply a tested SQL failover endpoint.
+Expand node-to-node TCP 26257 firewall rules only to the selected DB peers and
+SQL clients. The [distributed database guide](QUICKSTART_DATABASE_CLUSTER.md)
+provides per-node Compose configuration and direct SQL host-list failover for an
+isolated lab. New connections can use surviving nodes; in-flight transactions
+can still fail and are not automatically replayed by PKICA.
+
+The online CA is needed for issuance and responder signing. Taking this same
+service offline interrupts those operations. An offline root requires a
+separate root-key lifecycle and operational design; merely moving the running
+CA container to an air-gapped machine does not provide one.
+
+Application replication needs load balancing, durable state, certificate
+distribution/renewal, and failure testing. The repository supplies Docker Compose
+examples; it does not supply a Kubernetes or Helm deployment. A Kubernetes
+deployment would also need explicit network policies, workload identity,
+persistent storage, and rollout/recovery procedures.
