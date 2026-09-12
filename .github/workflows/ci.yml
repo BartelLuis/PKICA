@@ -112,7 +112,7 @@ jobs:
           - service: ca
             extra_env: >-
               -e PKICA_ALLOW_SOFTWARE_KMS=true
-              -e PKICA_SOFTWARE_KMS_MASTER_KEY=ZHVtbXkta2V5LWZvci1jaS1zbW9rZS10ZXN0LW9ubHkh
+              -e PKICA_SOFTWARE_KMS_MASTER_KEY=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
               -e PKICA_AUDIT_HASH_CHAIN_SECRET=ci-smoke-test-secret
           - service: ra
             extra_env: -e PKICA_ENVIRONMENT=development
