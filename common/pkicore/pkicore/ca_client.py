@@ -6,9 +6,21 @@ certificate issued by the platform's internal "infra" CA.
 """
 from __future__ import annotations
 
+import re
+from urllib.parse import quote
+
 import httpx
 
 from pkicore.config import Settings
+
+
+_CA_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}\Z")
+
+
+def _ca_name_path_segment(ca_name: str) -> str:
+    if not _CA_NAME_PATTERN.fullmatch(ca_name):
+        raise ValueError("Invalid CA name")
+    return quote(ca_name, safe="")
 
 
 class CAClient:
@@ -41,12 +53,14 @@ class CAClient:
         return resp.json()
 
     def get_ca_certificate(self, ca_name: str) -> dict:
-        resp = self._client.get(f"/internal/v1/ca/{ca_name}/certificate")
+        safe_ca_name = _ca_name_path_segment(ca_name)
+        resp = self._client.get(f"/internal/v1/ca/{safe_ca_name}/certificate")
         resp.raise_for_status()
         return resp.json()
 
     def fetch_crl(self, ca_name: str) -> bytes:
-        resp = self._client.get(f"/internal/v1/crl/{ca_name}")
+        safe_ca_name = _ca_name_path_segment(ca_name)
+        resp = self._client.get(f"/internal/v1/crl/{safe_ca_name}")
         resp.raise_for_status()
         return resp.content
 
