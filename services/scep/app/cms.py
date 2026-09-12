@@ -33,14 +33,12 @@ def decrypt_enveloped_data(der: bytes, recipient_private_key_decrypt) -> bytes:
 
     if "aes128" in algo_oid:
         cipher = Cipher(algorithms.AES(symmetric_key), modes.CBC(iv))
-    elif "des_ede3" in algo_oid or "3des" in algo_oid or algo_oid == "1.2.840.113549.3.7":
-        cipher = Cipher(algorithms.TripleDES(symmetric_key), modes.CBC(iv))
     else:
         raise ValueError(f"Unsupported SCEP content encryption algorithm: {algo_oid}")
 
     decryptor = cipher.decryptor()
     padded = decryptor.update(ciphertext) + decryptor.finalize()
-    unpadder = sym_padding.PKCS7(128 if "aes" in algo_oid else 64).unpadder()
+    unpadder = sym_padding.PKCS7(128).unpadder()
     return unpadder.update(padded) + unpadder.finalize()
 
 
