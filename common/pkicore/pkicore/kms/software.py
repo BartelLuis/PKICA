@@ -7,6 +7,7 @@ a production deployment.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -24,7 +25,6 @@ _DIGEST = {
     SignatureAlgorithm.ECDSA_SHA256: hashes.SHA256(),
     SignatureAlgorithm.ECDSA_SHA384: hashes.SHA384(),
 }
-
 
 class SoftwareKMSBackend(KMSBackend):
     name = "software"
@@ -45,9 +45,18 @@ class SoftwareKMSBackend(KMSBackend):
         self._path.mkdir(parents=True, exist_ok=True)
 
     def _key_file(self, key_id: str) -> Path:
-        return self._path / f"{key_id}.enc"
+        if not key_id or key_id in {".", ".."} or "\\" in key_id:
+            raise ValueError("Invalid key_id")
+        key_path = Path(key_id)
+        if key_path.is_absolute() or len(key_path.parts) != 1:
+            raise ValueError("Invalid key_id")
+        base_path = self._path.resolve(strict=True)
+        filename = f"{hashlib.sha256(key_id.encode()).hexdigest()}.enc"
+        return base_path / filename
 
     def create_key(self, spec: KeySpec) -> str:
+        key_id = spec.key_id
+        key_path = self._key_file(key_id)
         if spec.algorithm.startswith("RSA"):
             bits = int(spec.algorithm.split("_")[1])
             key = rsa.generate_private_key(public_exponent=65537, key_size=bits)
@@ -60,9 +69,9 @@ class SoftwareKMSBackend(KMSBackend):
             encryption_algorithm=serialization.NoEncryption(),
         )
         nonce = os.urandom(12)
-        ciphertext = self._aesgcm.encrypt(nonce, pem, spec.key_id.encode())
-        self._key_file(spec.key_id).write_bytes(nonce + ciphertext)
-        return spec.key_id
+        ciphertext = self._aesgcm.encrypt(nonce, pem, key_id.encode())
+        key_path.write_bytes(nonce + ciphertext)
+        return key_id
 
     def _load_private(self, key_id: str):
         blob = self._key_file(key_id).read_bytes()
