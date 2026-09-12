@@ -19,7 +19,7 @@ _CA_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}\Z")
 
 def _ca_name_path_segment(ca_name: str) -> str:
     if not _CA_NAME_PATTERN.fullmatch(ca_name):
-        raise ValueError("Invalid CA name")
+        raise httpx.HTTPError("Invalid CA name")
     return quote(ca_name, safe="")
 
 
