@@ -14,7 +14,8 @@ import httpx
 from pkicore.config import Settings
 
 
-_CA_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,254}\Z")
+_MAX_CA_NAME_LENGTH = 255
+_CA_NAME_PATTERN = re.compile(rf"[A-Za-z0-9][A-Za-z0-9._-]{{0,{_MAX_CA_NAME_LENGTH - 1}}}\Z")
 
 
 def _ca_name_path_segment(client: httpx.Client, ca_name: str, *, request_path: str) -> str:
