@@ -26,7 +26,7 @@ def _ca_name_path_segment(client: httpx.Client, ca_name: str, *, request_path: s
     as defense in depth so future allowed-character changes still preserve a
     single-segment path boundary.
     """
-    if ca_name in {".", ".."} or not _CA_NAME_PATTERN.fullmatch(ca_name):
+    if any(segment in {".", ".."} for segment in ca_name.split("/")) or not _CA_NAME_PATTERN.fullmatch(ca_name):
         raise httpx.RequestError("Invalid CA name", request=client.build_request("GET", request_path))
     return quote(ca_name, safe="")
 
