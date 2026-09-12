@@ -15,11 +15,11 @@ from pkicore.config import Settings
 
 
 _MAX_CA_NAME_LENGTH = 255
-_CA_NAME_PATTERN = re.compile(rf"[A-Za-z0-9][A-Za-z0-9._-]{{0,{_MAX_CA_NAME_LENGTH - 1}}}\Z")
+_CA_NAME_PATTERN = re.compile(rf"[A-Za-z0-9._-]{{1,{_MAX_CA_NAME_LENGTH}}}\Z")
 
 
 def _ca_name_path_segment(client: httpx.Client, ca_name: str, *, request_path: str) -> str:
-    if not _CA_NAME_PATTERN.fullmatch(ca_name):
+    if ca_name in {".", ".."} or not _CA_NAME_PATTERN.fullmatch(ca_name):
         raise httpx.RequestError("Invalid CA name", request=client.build_request("GET", request_path))
     return quote(ca_name, safe="")
 
