@@ -191,7 +191,7 @@ jobs:
       - name: nginx -t (gateway)
         if: matrix.service == 'gateway'
         run: |
-          docker run --rm \
+          docker run --rm --user 0:0 \
             -v "${PWD}/certs/gateway.crt:/certs/server.crt:ro" \
             -v "${PWD}/certs/gateway.key:/certs/server.key:ro" \
             -v "${PWD}/certs/client-ca-bundle.crt:/certs/client-ca-bundle.crt:ro" \
@@ -200,7 +200,7 @@ jobs:
       - name: nginx -t (ca-mtls-proxy)
         if: matrix.service == 'ca-mtls-proxy'
         run: |
-          docker run --rm \
+          docker run --rm --user 0:0 \
             -v "${PWD}/certs/ca-mtls-proxy.crt:/certs/server.crt:ro" \
             -v "${PWD}/certs/ca-mtls-proxy.key:/certs/server.key:ro" \
             -v "${PWD}/certs/infra-ca.crt:/certs/internal-ca.crt:ro" \
