@@ -20,6 +20,8 @@ from pkicore import crypto  # noqa: E402
 from pkicore.kms.base import KeySpec, SignatureAlgorithm  # noqa: E402
 from pkicore.kms.software import SoftwareKMSBackend  # noqa: E402
 
+INVALID_KEY_IDS = ["../escape", "nested/key", "/tmp/escape", r"nested\key"]
+
 
 @pytest.fixture()
 def kms(tmp_path):
@@ -151,6 +153,21 @@ def test_software_kms_refuses_without_opt_in(monkeypatch, tmp_path):
         SoftwareKMSBackend(storage_path=str(tmp_path / "kms2"))
 
 
-def test_software_kms_rejects_path_traversal_key_ids(kms):
+@pytest.mark.parametrize("key_id", INVALID_KEY_IDS)
+def test_software_kms_rejects_invalid_key_ids_on_create(kms, key_id):
     with pytest.raises(ValueError, match="Invalid key_id"):
-        kms.create_key(KeySpec(key_id="../escape", algorithm="EC_P256", label="bad"))
+        kms.create_key(KeySpec(key_id=key_id, algorithm="EC_P256", label="bad"))
+
+
+@pytest.mark.parametrize("key_id", INVALID_KEY_IDS)
+def test_software_kms_rejects_invalid_key_ids_for_public_operations(kms, key_id):
+    kms.create_key(KeySpec(key_id="good-key", algorithm="EC_P256", label="good"))
+
+    with pytest.raises(ValueError, match="Invalid key_id"):
+        kms.public_key(key_id)
+
+    with pytest.raises(ValueError, match="Invalid key_id"):
+        kms.sign(key_id, b"payload", SignatureAlgorithm.ECDSA_SHA256)
+
+    with pytest.raises(ValueError, match="Invalid key_id"):
+        kms.key_exists(key_id)
