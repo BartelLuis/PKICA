@@ -1,5 +1,5 @@
 # Public-facing hardened nginx reverse proxy / mTLS-optional TLS termination.
-FROM nginxinc/nginx-unprivileged:1.29-alpine
+FROM nginxinc/nginx-unprivileged:1.31-alpine
 
 USER root
 RUN rm -f /etc/nginx/conf.d/default.conf
