@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM python:3.11-slim AS builder
+FROM python:3.14-slim AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
